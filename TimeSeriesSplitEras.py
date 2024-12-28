@@ -26,13 +26,15 @@ class TimeSeriesSplitEras(_BaseKFold):
     """
     
     def __init__(self, n_splits=5, test_size=None, 
-                 embargo_size=30, min_train_size=None):
+                 embargo_size=30, min_train_size=None, era_col='era', debug=False):
         super().__init__(n_splits, shuffle=False, random_state=None)
         self.test_size = test_size
         self.embargo_size = embargo_size
         self.min_train_size = min_train_size
+        self.era_col = era_col
+        self.debug = debug
     
-    def split(self, X, y=None, era_col='era', groups=None):
+    def split(self, X, y=None, groups=None):
         """
         Generate indices to split data into training and test set.
         
@@ -62,11 +64,11 @@ class TimeSeriesSplitEras(_BaseKFold):
         if not isinstance(X, pd.DataFrame):
             raise ValueError("X must be a pandas DataFrame containing the era column")
             
-        if era_col not in X.columns:
-            raise ValueError(f"era column '{era_col}' not found in DataFrame")
+        if self.era_col not in X.columns:
+            raise ValueError(f"era column '{self.era_col}' not found in DataFrame")
             
         # Get unique eras and ensure they're sorted
-        unique_eras = sorted(X[era_col].unique())
+        unique_eras = sorted(X[self.era_col].unique())
         n_eras = len(unique_eras)
         
         # Validate parameters
@@ -89,19 +91,29 @@ class TimeSeriesSplitEras(_BaseKFold):
             )
             
         # Create era to index mapping
-        era_to_idx = {era: X[X[era_col] == era].index for era in unique_eras}
+        era_to_idx = {era: X[X[self.era_col] == era].index for era in unique_eras}
         
         # Generate the splits
         for i in range(self.n_splits):
-            # Calculate test start era index
-            test_start = n_eras - (i + 1) * test_size_eras
+            # Calculate test start era index (moving forward instead of backward)
+            if self.test_size is None:
+                test_size_eras = n_eras // (self.n_splits + 1)
+            else:
+                test_size_eras = self.test_size
+
+            # Start from the earliest possible test period and move forward
+            test_start = test_size_eras * i
             test_end = test_start + test_size_eras
             
             # Calculate train end era index (accounting for embargo)
             train_end = test_start - self.embargo_size
             
-            # Calculate train start era index
-            train_start = max(0, train_end - min_train_size_eras)
+            # Always start from the first era for expanding window
+            train_start = 0
+            
+            # Verify we have enough training data
+            if self.min_train_size is not None and (train_end - train_start) < self.min_train_size:
+                raise ValueError(f"Not enough training eras. Got {train_end - train_start}, need at least {self.min_train_size}")
             
             # Get eras for this split
             train_eras = unique_eras[train_start:train_end]
@@ -111,6 +123,13 @@ class TimeSeriesSplitEras(_BaseKFold):
             train_indices = np.concatenate([era_to_idx[era] for era in train_eras])
             test_indices = np.concatenate([era_to_idx[era] for era in test_eras])
             
+            # Print debug information if enabled
+            if self.debug:
+                print(f"\nSplit {i+1}/{self.n_splits}")
+                print(f"Train eras: {train_eras[0]} to {train_eras[-1]} (total: {len(train_eras)})")
+                print(f"Test eras: {test_eras[0]} to {test_eras[-1]} (total: {len(test_eras)})")
+                print(f"Embargo eras: {unique_eras[train_end]} to {unique_eras[test_start-1]}")
+                
             yield train_indices, test_indices
             
     def get_n_splits(self, X=None, y=None, groups=None):
@@ -118,7 +137,7 @@ class TimeSeriesSplitEras(_BaseKFold):
         return self.n_splits
 
 
-def custom_cross_val_score(estimator, X, y, cv, scoring_func, **kwargs):
+def custom_cross_val_score(estimator, X, y, cv, scoring_func, era_wise=False, debug=False, **kwargs):
     """
     Evaluate a score by cross-validation using a custom scoring function.
     
@@ -140,6 +159,12 @@ def custom_cross_val_score(estimator, X, y, cv, scoring_func, **kwargs):
         Custom scoring function that takes y_true and y_pred as inputs
         and returns a score.
         
+    era_wise : bool, default=False
+        If True, passes the test DataFrame to the scoring function for era-wise calculations.
+
+    debug : bool, default=False
+        If True, prints additional information about each split and score.
+        
     **kwargs : dict
         Additional parameters to be passed to the scoring function.
         
@@ -150,7 +175,7 @@ def custom_cross_val_score(estimator, X, y, cv, scoring_func, **kwargs):
     """
     scores = []
     
-    for train_idx, test_idx in cv.split(X):
+    for i, (train_idx, test_idx) in enumerate(cv.split(X)):
         # Split the data
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
@@ -160,10 +185,58 @@ def custom_cross_val_score(estimator, X, y, cv, scoring_func, **kwargs):
         y_pred = estimator.predict(X_test)
         
         # Calculate score
-        score = scoring_func(y_test, y_pred, **kwargs)
+        if era_wise:
+            score = scoring_func(y_test, y_pred, df=X_test, **kwargs)
+        else:
+            score = scoring_func(y_test, y_pred, **kwargs)
+            
+        if debug:
+            print(f"\nSplit {i+1} Score: {score:.4f}")
+            
         scores.append(score)
         
     return np.array(scores)
+
+
+def era_wise_correlation(y_true, y_pred, df, era_col, prediction_name='prediction', target_col='target'):
+    """
+    Calculate era-wise correlation between predictions and targets.
+    
+    Parameters
+    ----------
+    y_true : array-like
+        True target values
+    y_pred : array-like
+        Predicted values
+    df : pandas.DataFrame
+        DataFrame containing the era column
+    era_col : str
+        Name of the era column
+    prediction_name : str, default='prediction'
+        Name to use for prediction column
+    target_col : str, default='target'
+        Name of the target column
+        
+    Returns
+    -------
+    float
+        Mean correlation across eras
+    """
+    # Create DataFrame with predictions and true values
+    temp_df = pd.DataFrame({
+        prediction_name: y_pred,
+        target_col: y_true,
+        era_col: df[era_col].values
+    })
+    
+    # Calculate correlation for each era
+    corrs = []
+    for _, era_df in temp_df.groupby(era_col):
+        corr_i = numerai_corr(era_df[[prediction_name]], era_df[target_col])
+        corrs.append(corr_i[0])
+    
+    # Return mean correlation
+    return np.mean(corrs)
 
 
 # Example usage:
