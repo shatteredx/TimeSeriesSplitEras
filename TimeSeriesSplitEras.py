@@ -2,7 +2,7 @@ from sklearn.model_selection._split import _BaseKFold
 import numpy as np
 import pandas as pd
 
-class EraBasedTimeSeriesSplit(_BaseKFold):
+class TimeSeriesSplitEras(_BaseKFold):
     """
     Time Series cross-validator with era-based embargo periods.
     Provides train/test indices to split time series data samples 
@@ -169,7 +169,7 @@ def custom_cross_val_score(estimator, X, y, cv, scoring_func, **kwargs):
 # Example usage:
 """
 # Initialize the custom splitter
-cv = EraBasedTimeSeriesSplit(
+cv = TimeSeriesSplitEras(
     n_splits=5,
     test_size=12,  # number of eras for test set
     embargo_size=30,  # number of eras to exclude
