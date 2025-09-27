@@ -27,6 +27,7 @@ class TimeSeriesSplitEras(_BaseKFold):
         
     era_col : str, default='era'
         Name of the column in the DataFrame containing era identifiers.
+        Can be integers (1, 2, 3) or strings ("0001", "0002" or "1", "2", "3").
         
     debug : bool, default=False
         If True, prints detailed information about each split.
@@ -35,7 +36,8 @@ class TimeSeriesSplitEras(_BaseKFold):
     -----
     - The 'groups' parameter in split() is included for scikit-learn compatibility
       but is not used (era grouping is determined by the era_col).
-    - feature_cols parameter allows selecting specific columns from X.
+    - Eras are automatically sorted numerically if they can be converted to integers,
+      otherwise sorted lexicographically.
     """
     
     def __init__(self, n_splits=5, embargo_size=30, min_train_ratio=0.5, 
@@ -91,12 +93,21 @@ class TimeSeriesSplitEras(_BaseKFold):
             required_cols = [self.era_col] + feature_cols
             X = X[required_cols]
             
-        # Get unique eras and ensure they're sorted
-        unique_eras = sorted(X[self.era_col].unique())
+        # Get unique eras and sort them appropriately
+        unique_eras = X[self.era_col].unique()
+        
+        # Try to sort numerically (handles both int and string eras like "1", "2", "1000")
+        try:
+            unique_eras = sorted(unique_eras, key=lambda x: int(x))
+        except (ValueError, TypeError):
+            # If conversion fails, sort lexicographically (for eras like "era_001")
+            unique_eras = sorted(unique_eras)
+        
         n_eras = len(unique_eras)
         
         if self.debug:
             print(f"\nTotal number of eras: {n_eras}")
+            print(f"Era type: {type(unique_eras[0]).__name__}")
             print(f"First era: {unique_eras[0]}")
             print(f"Last era: {unique_eras[-1]}")
             
