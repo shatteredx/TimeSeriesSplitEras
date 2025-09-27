@@ -279,7 +279,7 @@ If you use this in your research or competition submissions, please cite:
 ```bibtex
 @software{timeseriesspliters,
   title = {TimeSeriesSplitEras: Era-based Time Series Cross-Validation with Embargo},
-  author = {Your Name},
+  author = {ShatteredX},
   year = {2025},
   url = {https://github.com/yourusername/TimeSeriesSplitEras}
 }
