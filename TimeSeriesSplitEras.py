@@ -5,26 +5,78 @@ import pandas as pd
 class TimeSeriesSplitEras(_BaseKFold):
     """
     Time Series cross-validator with era-based embargo periods.
-    Provides train/test indices to split time series data samples 
-    that are observed at fixed time intervals.
+    
+    Provides train/test indices to split time series data samples organized
+    by eras (discrete time periods). Implements an expanding window approach
+    where training data grows over time, with an embargo period between
+    training and test sets to prevent data leakage.
+    
+    Parameters
+    ----------
+    n_splits : int, default=5
+        Number of splits/folds for cross-validation.
+        
+    embargo_size : int, default=30
+        Number of eras to exclude between training and test sets to prevent
+        data leakage from overlapping time periods.
+        
+    min_train_ratio : float, default=0.5
+        Ratio of total eras to use for initial training period (including embargo).
+        Must be between 0 and 1. For example, 0.5 means 50% of eras are used for
+        initial training.
+        
+    era_col : str, default='era'
+        Name of the column in the DataFrame containing era identifiers.
+        
+    debug : bool, default=False
+        If True, prints detailed information about each split.
+        
+    Notes
+    -----
+    - The 'groups' parameter in split() is included for scikit-learn compatibility
+      but is not used (era grouping is determined by the era_col).
+    - feature_cols parameter allows selecting specific columns from X.
     """
     
-    def __init__(self, n_splits=5, test_size=None, 
-                 embargo_size=30, min_train_size=None, era_col='era', 
-                 debug=False, min_train_ratio=None):
+    def __init__(self, n_splits=5, embargo_size=30, min_train_ratio=0.5, 
+                 era_col='era', debug=False):
         super().__init__(n_splits, shuffle=False, random_state=None)
-        self.test_size = test_size
         self.embargo_size = embargo_size
-        self.min_train_size = min_train_size
+        self.min_train_ratio = min_train_ratio
         self.era_col = era_col
         self.debug = debug
-        self.min_train_ratio = min_train_ratio
         
-        if min_train_ratio is not None and (min_train_ratio <= 0 or min_train_ratio > 1):
+        if min_train_ratio is None or min_train_ratio <= 0 or min_train_ratio > 1:
             raise ValueError("min_train_ratio must be between 0 and 1")
     
     def split(self, X, y=None, feature_cols=None, groups=None):
-        """Generate indices to split data into training and test set."""
+        """
+        Generate indices to split data into training and test sets.
+        
+        Parameters
+        ----------
+        X : pd.DataFrame
+            The input data containing the era column.
+            
+        y : array-like, optional
+            Target variable (not used, included for sklearn compatibility).
+            
+        feature_cols : list of str, optional
+            List of feature column names to include. If provided, only these
+            columns plus the era column will be retained.
+            
+        groups : array-like, optional
+            Group labels (not used, included for sklearn compatibility).
+            Era grouping is determined by the era_col.
+            
+        Yields
+        ------
+        train_indices : np.ndarray
+            The training set indices for that split.
+            
+        test_indices : np.ndarray
+            The testing set indices for that split.
+        """
         if not isinstance(X, pd.DataFrame):
             raise ValueError("X must be a pandas DataFrame containing the era column")
             
@@ -49,20 +101,17 @@ class TimeSeriesSplitEras(_BaseKFold):
             print(f"Last era: {unique_eras[-1]}")
             
         # Create era to index mapping
-        era_to_idx = {era: X[X[self.era_col] == era].index for era in unique_eras}
+        era_to_idx = {era: X[X[self.era_col] == era].index.values for era in unique_eras}
         
         # Calculate initial training size based on min_train_ratio
         initial_train_size = int(np.ceil(n_eras * self.min_train_ratio))
         
         # Ensure we have enough eras for training + embargo
-        if initial_train_size <= self.embargo_size + 1:
+        if initial_train_size <= self.embargo_size:
             raise ValueError(
-                f"Training period ({initial_train_size} eras) must be larger than "
-                f"embargo size ({self.embargo_size}) + 1 era"
+                f"Initial training period ({initial_train_size} eras) must be larger than "
+                f"embargo size ({self.embargo_size} eras)"
             )
-        
-        # Calculate effective training size (excluding embargo)
-        train_size = initial_train_size - self.embargo_size
         
         # Calculate test size
         remaining_eras = n_eras - initial_train_size
@@ -85,11 +134,11 @@ class TimeSeriesSplitEras(_BaseKFold):
                     print(f"Skipping split {i+1} as it would exceed available eras")
                 continue
             
-            # Training expands up to embargo period
+            # Training expands up to embargo period before test
             train_start = 0
             train_end = test_start - self.embargo_size
             
-            # Embargo period
+            # Embargo period boundaries (for debugging)
             embargo_start = train_end
             embargo_end = test_start
             
