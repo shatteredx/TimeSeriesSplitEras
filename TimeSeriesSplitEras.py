@@ -17,7 +17,7 @@ class TimeSeriesSplitEras(_BaseKFold):
     n_splits : int, default=5
         Number of splits/folds for cross-validation.
 
-    embargo_size : int, default=30
+    embargo_size : int, default=12
         Number of eras to exclude between training and test sets to prevent
         data leakage from overlapping time periods.
 
@@ -42,7 +42,7 @@ class TimeSeriesSplitEras(_BaseKFold):
     - The last fold absorbs any remainder eras so no data is wasted.
     """
 
-    def __init__(self, n_splits=5, embargo_size=30, min_train_ratio=0.5,
+    def __init__(self, n_splits=5, embargo_size=12, min_train_ratio=0.5,
                  era_col='era', debug=False):
         super().__init__(n_splits, shuffle=False, random_state=None)
         self.embargo_size = embargo_size
